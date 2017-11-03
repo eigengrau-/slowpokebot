@@ -3,7 +3,7 @@
 
 Developed to automate guild management processes.
 
-##Current working functions the bot has:
+## Current working functions the bot has:
 - Tracks node war participation
 - Tracks guild mission participation
 - Makes announcements/notifications/reminders of events (integrated with Shivtr API)
