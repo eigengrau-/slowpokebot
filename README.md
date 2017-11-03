@@ -3,6 +3,11 @@
 
 Developed to automate guild management processes.
 
-TODO: This.
+##Current working functions the bot has:
+- Tracks node war participation
+- Tracks guild mission participation
+- Makes announcements/notifications/reminders of events (integrated with Shivtr API)
+- Maintains a Sqlite database with a table for members: guild member's family name, discord nick, discord username, nw and gmission participation, and a table for the calendar
+- Group system: allows members to create, view and join groups (to replace the current way the LFG channel works)
 
 ![slowpokebot](https://i.imgur.com/q7j6K3v.png)
