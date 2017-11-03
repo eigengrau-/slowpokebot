@@ -1,5 +1,5 @@
 # slowpokebot
-###### A cog written in Python for [Red-DiscordBot](https://github.com/Cog-Creators/Red-DiscordBot). [Uses discord.py](https://discordpy.readthedocs.io/en/latest/api.html).
+###### A cog written in Python for [Red-DiscordBot](https://github.com/Cog-Creators/Red-DiscordBot). [Uses discord.py](https://discordpy.readthedocs.io/en/latest/api.html) and the [Shivtr API](http://shivtr.com/help/articles/34-getting-started)
 
 Developed to automate guild management processes.
 
