@@ -19,19 +19,78 @@ class EventNotification:
         self.month = [] #List of loaded events
         self.createtables() #Creates SQLite tables if they do not exist.
         self.load_events() #Loads events from database to self.month
-        self.event_run = False #Am I currently monitoring event notifications?
-        self.monitor_run = False #Am I currently monitoring Discord voice channels?
+        self.monitor_run = '' #Am I currently monitoring Discord voice channels?
         self.md_runtimes = [] #Populated by runmonitor. List of times to take voice channel snapshots.
         self.nw_num_members = 0 #Number of guildies that attended last NW
+        #self.server = self.bot.get_server('256537477009899523')
+        self.server = ''
         self.id = '336274317962772483' #Bot's ID
         self.hex_colours = [0x1abc9c, 0x16a085, 0x2ecc71, 0x27ae60, 0x3498db, 0x2980b9, 0x9b59b6, 0x8e44ad, 0x34495e, 0x2c3e50, 0xf1c40f, 0xf39c12, 0xe67e22, 0xd35400, 0xe74c3c, 0xc0392b, 0xecf0f1, 0xbdc3c7, 0x95a5a6, 0x7f8c8d] #a e s t h e t i c 
         self.groups = [Group('Static test group', 'NotVoytek', '1', 'Ser4', self.hex_colours[randrange(0, 19)])]
-        self.channelids = {'announcements': '353921936889479168', 'offense': '276513364228964353', 'defense': '276513403629994005', 'guildmissions': '240943280903290880', 'temp': '304607221147500544', 'ann_temp': '366382361610551296', 'gq_temp': '366690805928427520', 'lfg': '344663345892425741', 'lfg_temp': '366382361610551296'}
-        self.talking = False
-        self.voice = ''
-        #self.groups = []
+        self.tasks = {
+            'refresh_cal': datetime.now()+timedelta(hours=4),
+            'refresh_members': datetime.now()+timedelta(hours=2),
+            'backup_db': datetime.now()+timedelta(days=1)
+        }
+        self.chans = {}
+        asyncio.ensure_future(self.tick())
 
 ##############################General##############################
+    @asyncio.coroutine
+    def tick(self):
+        yield from self.getserver()
+        while True:
+            now = datetime.now()
+            print('tick')
+            #Monitors event reminders and sends notifications
+            for event in self.month:
+                for reminder in event.reminders:
+                    if (reminder) and (datetime.strptime(reminder, '%Y-%m-%d %I:%M %p')) < now:
+                        em = yield from event.gen_embed()
+                        if (len(event.reminders) > 2) and (event.event_type == '756874'):
+                            yield from self.bot.purge_from(self.chans['announcements'], check=self.is_embed)
+                            #yield from self.bot.send_message(self.chans['announcements'], discord.utils.get(self.server.roles, name='Guildies').mention, embed=em)#announcements
+                            yield from self.bot.send_message(self.chans['announcements'], 'Role mentioned here', embed=em)#announcements
+                        else:
+                            #yield from self.bot.send_message(self.chans['slowpokeonly'], discord.utils.get(self.server.roles, name='Guildies').mention, embed=em)#slowpokeonly
+                            yield from self.bot.send_message(self.chans['slowpokeonly'], 'Role mentioned here', embed=em)#slowpokeonly
+                        event.rem_reminder(reminder)
+            for task in self.tasks:
+                if self.tasks[task] < now:
+                    if task == 'refresh_cal':
+                        self.tasks['refresh_cal'] = datetime.now()+timedelta(hours=4)
+                        yield from self.refresh_calendar()
+                        yield from self.logger('Calendar refreshed. Next scheduled: ' + datetime.strftime(self.tasks['refresh_cal'], '%Y-%m-%d %I:%M %p'), False)
+                        print('Calendar refreshed. Next scheduled: ' + datetime.strftime(self.tasks['refresh_cal'], '%Y-%m-%d %I:%M %p'))
+                    elif task == 'refresh_members':
+                        self.tasks['refresh_members'] = datetime.now()+timedelta(hours=2)
+                        yield from self.parsemembers()
+                        yield from self.logger('Members refreshed. Next scheduled: ' + datetime.strftime(self.tasks['refresh_members'], '%Y-%m-%d %I:%M %p'), False)
+                        print('Members refreshed. Next scheduled: ' + datetime.strftime(self.tasks['refresh_members'], '%Y-%m-%d %I:%M %p'))
+                    elif task == 'backup_db':
+                        self.tasks['backup_db'] = datetime.now()+timedelta(days=1)
+                        yield from self.backup_db()
+                        yield from self.logger('Database backed up. Next scheduled: ' + datetime.strftime(self.tasks['backup_db'], '%Y-%m-%d %I:%M %p'), False)
+                        print('Database backed up. Next scheduled: ' + datetime.strftime(self.tasks['backup_db'], '%Y-%m-%d %I:%M %p'))
+            if self.monitor_run:
+                asyncio.ensure_future(self.monitordiscord())
+            yield from asyncio.sleep(5)
+
+    @asyncio.coroutine
+    def getserver(self):
+        while self.bot.is_logged_in == False:
+            yield from asyncio.sleep(5)
+        self.server = self.bot.get_server('216021345744584704')
+        self.chans = {
+            'announcements': discord.utils.get(self.server.channels, id='375873904075472897'),
+            'slowpokeonly': discord.utils.get(self.server.channels, id='375873904075472897'),
+            'offense': discord.utils.get(self.server.channels, id='375873904075472897'),
+            'cannon': discord.utils.get(self.server.channels, id='375873904075472897'),
+            'defense': discord.utils.get(self.server.channels, id='375873904075472897'),
+            'guild_missions': discord.utils.get(self.server.channels, id='375873904075472897'),
+            'lfg': discord.utils.get(self.server.channels, id='375873904075472897')
+        }
+
     @commands.command(pass_context=True)
     async def clean(self, ctx):
         """Deletes Slowpoke Bot's messages for the last 14 days."""
@@ -42,7 +101,8 @@ class EventNotification:
         with open('W:\\Development\\Red-DiscordBot\\data\\Slowpoke\\log.txt', 'a') as logfile:
             logfile.write('['+datetime.strftime(datetime.now(), '%Y-%m-%d %I:%M %p')+'] '+str(s)+'\n')
         if say:
-            await self.bot.say(s)
+            #await self.bot.say(s)
+            await self.bot.send_message(self.chans['announcements'], s)
 
     def is_me(self, m):
         """Only used for purge_from check."""
@@ -52,7 +112,7 @@ class EventNotification:
         """Only used for purge_from check."""
         return len(m.embeds) > 0
 
-    async def chanroles(self, ctx, role='Officer'):
+    async def chanroles(self, ctx, role='💠 Officer'):
         """Checks if command author has the correct permissions."""
         if role in [str(i) for i in ctx.message.author.roles]:
             return True
@@ -61,24 +121,23 @@ class EventNotification:
         return False
 
 ##############################Database##############################
-    async def db_tasks(self):
-        """Performs db tasks on a schedule."""
-        return None
-        #backup
-        #processcalendar
-        #refresh members from site
-        #refresh members from discord
-        #clear nwp/gmp data
+    @commands.command()
+    async def get_offline_members(self):
+        await self.bot.request_offline_members(self.server)
+        with open('W:\\Development\\Red-DiscordBot\\data\\Slowpoke\\members.txt', 'a', encoding='utf8') as memberfile:
+            for member in self.server.members:
+                if 'Guildies' in [str(i) for i in member.roles]:
+                    memberfile.write(member.display_name+','+str(member)+'\n')
+        print('done')
 
-    #CHECK IF ENTRY EXISTS WITH FAMILY NAME FIRST
     @commands.command(pass_context=True)
-    async def linknames(self, ctx, family: str, *args):
+    async def linknames(self, ctx, family: str, *args):#NEEDS TO HANDLE SPACES IN # NAMES
         """Links a Family name to a Discord Display Name and ID.
 
         !linknames Family / !linknames Family family#0000"""
         if await self.chanroles(ctx, 'Guildies'):
             duser = str(args[0]) if args else str(ctx.message.author.name+'#'+ctx.message.author.discriminator)
-            dname = discord.utils.get(ctx.message.server.members, name=duser.split('#')[0], discriminator=duser.split('#')[1]).display_name if args else ctx.message.author.display_name
+            dname = discord.utils.get(self.server.members, name=duser.split('#')[0], discriminator=duser.split('#')[1]).display_name if args else ctx.message.author.display_name
             exists_duser = self.dbq('SELECT count(*) FROM members WHERE duser = (?)', (duser,))[0]
             exists_family = self.dbq('SELECT count(*) FROM members WHERE family = (?)', (family,))[0]
             if exists_family == 1:
@@ -91,37 +150,33 @@ class EventNotification:
                 self.dbq('INSERT INTO members (family, dnick, duser) VALUES (?,?,?)', (family, dname, duser))
                 await self.logger('```fix\n'+duser+' was not found. Creating new entry to link with '+dname+' and '+family+'.```\n')
 
-    @commands.command(pass_context=True)#TODO NEXT
-    async def parsemembers(self, ctx): #get from shivtr json instead of file
-        if await self.chanroles(ctx):
-            user = '{"user":{"email":"email","password":"password"}}'
-            h = {"Content-Type": "application/json"}
-            login_url = 'http://slowpoke.shivtr.com/users/sign_in.json'
-            members_url = 'http://slowpoke.shivtr.com/members.json'
-            auth = {'auth_token': requests.post(login_url, data=user, headers=h).json()['user_session']['authentication_token']}
-            members = requests.get(members_url, data=auth).json()['members']
-            for member in members:
-                exists = self.dbq('SELECT count(*) FROM members WHERE family LIKE (?)', (member['display_name'],))
-                if exists[0] == 0:
-                    await self.logger('Creating entry for family name: '+member['display_name'], False)
-                    self.dbq('INSERT INTO members (family) VALUES (?)', (member['display_name'],))
-                else:
-                    await self.logger(member['display_name']+' already exists.', False)
-            #Links discord usernames with fam names
-            for x in list(ctx.message.server.members):
-                for role in list(x.roles):
-                    if str(role) == 'Guildies': #CHANGE TO GUILDIE
-                        username = x.name + '#' + str(x.discriminator)
-                        foo = re.split('\s+|\(+', x.display_name)[0]
-                        await self.logger('Updating entry for: '+username, False)
-                        self.dbq('UPDATE members SET dnick = ?, duser = ? WHERE family LIKE ?', (x.display_name, username, foo))
+    async def parsemembers(self):
+        user = '{"user":{"email":"haggard05@gmail.com","password":"_W0jt3k!"}}'
+        h = {"Content-Type": "application/json"}
+        login_url = 'http://slowpoke.shivtr.com/users/sign_in.json'
+        members_url = 'http://slowpoke.shivtr.com/members.json'
+        auth = {'auth_token': requests.post(login_url, data=user, headers=h).json()['user_session']['authentication_token']}
+        members = requests.get(members_url, data=auth).json()['members']
+        for member in members:
+            exists = self.dbq('SELECT count(*) FROM members WHERE family LIKE (?)', (member['display_name'],))
+            if exists[0] == 0:
+                await self.logger('Creating entry for family name: '+member['display_name'], False)
+                self.dbq('INSERT INTO members (family) VALUES (?)', (member['display_name'],))
+            else:
+                await self.logger(member['display_name']+' already exists.', False)
+        #Links discord usernames with fam names
+        for x in list(self.server.members):
+            for role in list(x.roles):
+                if str(role) == 'Guildies': #CHANGE TO GUILDIE
+                    username = x.name + '#' + str(x.discriminator)
+                    foo = re.split('\s+|\(+', x.display_name)[0]
+                    await self.logger('Updating entry for: '+username, False)
+                    self.dbq('UPDATE members SET dnick = ?, duser = ? WHERE family LIKE ?', (x.display_name, username, foo))
 
-    @commands.command()
-    async def backupdb(self):
+    async def backup_db(self):
         """Makes a backup of slowpoke.db"""
-        if await self.chanroles(ctx):
-            shutil.copy2(self.db_path, self.db_path + '.bak')
-            await self.logger('Database backed up.')
+        shutil.copy2(self.db_path, self.db_path + '.bak')
+        await self.logger('Database backed up.', False)
 
     def dbq(self, *args):
         if args:
@@ -153,7 +208,7 @@ class EventNotification:
                 cur = conn.cursor()
                 cur.execute("CREATE TABLE IF NOT EXISTS calendar (eid text, e_instance_id text, event_type text, date_time text, title text, imagesuff text, location text, reminders text)")
                 cur.execute("CREATE TABLE IF NOT EXISTS members (family text, dnick text, duser text, nwp text, gqp text)")
-                cur.execute("CREATE TABLE IF NOT EXISTS nodewars (duration_minutes int, num_members int)")
+                cur.execute("CREATE TABLE IF NOT EXISTS nodewars (nw_date text, duration_minutes int, num_members int)")
                 cur.execute("CREATE TABLE IF NOT EXISTS guildquests (last_parsed text)")
                 cur.execute("CREATE TABLE IF NOT EXISTS groups (group_n text, group_m text, created_at text, last_updated text, active text, id integer primary key)")
         except Error as e:
@@ -166,55 +221,84 @@ class EventNotification:
         """Begin monitoring Discord for NW participation.
 
         Use command again to end the monitoring."""
-        if await self.chanroles(ctx):
-            start = datetime.now()
-            if self.monitor_run == False:
-                self.dbq('DELETE FROM nodewars')
-                await self.logger('Monitoring Discord for Node War Participation...')
-                for x in range(12):#run every 10 minutes after 6pm
-                    #self.md_runtimes.append(start+timedelta(minutes=(x*10)))#every 10 min
-                    self.md_runtimes.append(start+timedelta(minutes=(x)))#for testing
-                self.monitor_run = True
-                self.futuremd = asyncio.Future()
-                asyncio.ensure_future(self.monitordiscord(self.futuremd, ctx))
-            else:
-                self.monitor_run = False
-                duration_m = int(round((start-datetime.now().replace(hour=18, minute=00)).total_seconds()/60))
-                self.dbq('INSERT INTO nodewars (duration_minutes, num_members) VALUES (?,?)', (duration_m, self.nw_num_members))
-                self.nw_num_members = 0
-                await self.logger('Ending Discord monitoring of Node War Participation...')
+        print('runmonitor')
+        start = datetime.now()
+        for x in range(3):#run every 10 minutes after 6pm - 12
+            #self.md_runtimes.append(start+timedelta(minutes=(x*10)))#every 10 min
+            self.md_runtimes.append(start+timedelta(minutes=(x)))#for testing
+        self.monitor_run = True
 
-    async def monitordiscord(self, future, ctx):
-        while self.monitor_run:
-            print('tock')
-            for t in self.md_runtimes:
-                if t <= datetime.now():
-                    await self.logger('Taking Discord Snapshot...')
-                    self.md_runtimes.remove(t)
-                    now = datetime.now().strftime('%d-%m_%H:%M')
-                    #Retrieve list of members currently in applicable voice channels
-                    duo = list(ctx.message.server.get_channel('300204089676136448').voice_members) + list(ctx.message.server.get_channel('256540097858502657').voice_members) #change id
-                    num_members = 0
-                    for usr in duo:
-                        #Do not include idle users
-                        if str(usr.status) != 'idle':#idle
-                            num_members += 1
-                            duser = str(usr.name+'#'+usr.discriminator)
-                            _nwp = self.dbq("SELECT nwp FROM members WHERE duser = ?", (duser,))
-                            if _nwp and _nwp[0]:
-                                _nwp = json.loads(_nwp[0])
-                                _nwp.append(now)
-                                __nwp = _nwp
-                            elif _nwp:
-                                __nwp = [now]
-                            else:
-                                __nwp = [now]
-                                print('Cannot find '+duser+' in database. Creating entry.')
-                                self.dbq("INSERT INTO members (duser) VALUES (?)", (duser,))
-                            self.dbq("UPDATE members SET nwp = ? WHERE duser = ?", (json.dumps(__nwp), duser))
-                            self.nw_num_members = num_members if (num_members > self.nw_num_members) else self.nw_num_members
-                    await self.logger('Processed ' + str(self.nw_num_members)+' members.')
-            await asyncio.sleep(5)
+    # @commands.command(pass_context=True)
+    # async def runmonitor(self, ctx):
+    #     """Begin monitoring Discord for NW participation.
+
+    #     Use command again to end the monitoring."""
+    #     if await self.chanroles(ctx):
+    #         start = datetime.now()
+    #         if self.monitor_run == False:
+    #             #self.dbq('DELETE FROM nodewars')
+    #             await self.logger('Monitoring Discord for Node War Participation...')
+    #             for x in range(12):#run every 10 minutes after 6pm
+    #                 #self.md_runtimes.append(start+timedelta(minutes=(x*10)))#every 10 min
+    #                 self.md_runtimes.append(start+timedelta(seconds=(x)))#for testing
+    #             self.monitor_run = True
+    #             self.futuremd = asyncio.Future()
+    #             asyncio.ensure_future(self.monitordiscord(self.futuremd, ctx))
+    #         else:
+    #             self.monitor_run = False
+    #             duration_m = int(round((start-datetime.now().replace(hour=18, minute=00)).total_seconds()/60))
+    #             self.dbq('INSERT INTO nodewars (nw_date, duration_minutes, num_members) VALUES (?,?,?)', (datetime.now().strftime('%d-%m-%Y'), duration_m, self.nw_num_members))
+    #             self.nw_num_members = 0
+    #             await self.logger('Ending Discord monitoring of Node War Participation...')
+
+    async def monitordiscord(self):
+        print('tock')
+        print(len(self.md_runtimes))
+        for t in self.md_runtimes:
+            if t <= datetime.now():
+                print('snapshot')
+                self.md_runtimes.remove(t)
+                now = datetime.now().strftime('%d-%m_%H:%M')
+                cur_nw = datetime.now().strftime('%d-%m-%Y')
+                #Retrieve list of members currently in applicable voice channels
+                voice_connected_members = list(self.chans['offense'].voice_members) + list(self.chans['defense'].voice_members) + list(self.chans['cannon'].voice_members)
+                num_members = 0
+                for usr in voice_connected_members:
+                    #Do not include idle users
+                    #change nwp to: {'%d-%m-%Y': ['6:00', '6:10', '6:20', '6:30', '6:40', '6:50', '7:00', '7:10', '7:20', '7:30', '7:40', '7:50', '8:00']}
+                    #also save/log endtime
+                    if str(usr.status) != 'idle':#idle
+                        num_members += 1
+                        duser = str(usr)
+                        _nwp = self.dbq("SELECT nwp FROM members WHERE duser = ?", (duser,))
+                        if _nwp and _nwp[0]:
+                            _nwp = json.loads(_nwp[0])
+                            print(_nwp)
+                            for x in _nwp:
+                                if datetime.strptime(x, '%d-%m-%Y').date() == datetime.today().date():
+                                    print('same day')
+                                    _nwp[x].append(now)
+                                else:
+                                    print('not same day')
+                                #x.append(now)
+                            print(_nwp)
+                            #_nwp.append(now)
+                            __nwp = _nwp
+                        elif _nwp:
+                            __nwp = {cur_nw: [now]}
+                        else:
+                            __nwp = {cur_nw: [now]}
+                            print('Cannot find '+duser+' in database. Creating entry.')
+                            self.dbq("INSERT INTO members (duser) VALUES (?)", (duser,))
+                        self.dbq("UPDATE members SET nwp = ? WHERE duser = ?", (json.dumps(__nwp), duser))
+                        self.nw_num_members = num_members if (num_members > self.nw_num_members) else self.nw_num_members
+                if len(self.md_runtimes) == 0:
+                    print('last runtime')
+                    duration_m = int(round((datetime.now()-datetime.now().replace(hour=18, minute=00)).total_seconds()/60))
+                    self.dbq('INSERT INTO nodewars (nw_date, duration_minutes, num_members) VALUES (?,?,?)', (datetime.now().strftime('%d-%m-%Y'), duration_m, self.nw_num_members))
+                    self.nw_num_members = 0
+                    self.monitor_run = False
+        return None
 
     @commands.command(pass_context=True)
     async def nwp_list(self, ctx):
@@ -239,7 +323,7 @@ class EventNotification:
             gq = str(self.dbq('SELECT * FROM guildquests')[0][0])
             lastgq = datetime.strptime(gq, '%Y-%m-%d %H:%M:%S.%f') if gq != None else ''
             self.dbq('INSERT INTO guildquests (last_parsed) VALUES (?)', (datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f'),))
-            async for message in self.bot.logs_from(ctx.message.server.get_channel(self.channelids['gq_temp']), after=lastgq):
+            async for message in self.bot.logs_from(self.chans['guild_missions'], after=lastgq):
                 for mention in message.mentions:
                     _gqp = self.dbq('SELECT gqp FROM members WHERE duser = ?', (str(mention),))
                     if _gqp:#dont work
@@ -267,25 +351,6 @@ class EventNotification:
             await self.bot.send_message(ctx.message.author, embed=emb)
 
 ##############################Events##############################
-    async def tick_event(self, future, ctx):
-        while self.event_run:
-            print(future.result)
-            now = datetime.now()
-            print('tick')
-            for event in self.month:
-                for reminder in event.reminders:
-                    if (reminder) and (datetime.strptime(reminder, '%Y-%m-%d %I:%M %p')) < now:
-                        em = await event.gen_embed()
-                        if (len(event.reminders) > 2) and (event.event_type == '756874'):
-                            await self.bot.purge_from(ctx.message.server.get_channel(self.channelids['ann_temp']), check=self.is_embed)
-                            await self.bot.send_message(ctx.message.server.get_channel(self.channelids['ann_temp']),'@here', embed=em)#announcements
-                        else:
-                            await self.bot.send_message(ctx.message.server.get_channel(self.channelids['temp']),'@here', embed=em)#slowpokeonly
-                        event.rem_reminder(reminder)
-                    else:
-                        future.set_result('Waiting')
-            await asyncio.sleep(5)
-
     @commands.command()
     async def create_test_event(self):
         self.dbq('DELETE FROM calendar WHERE eid = ?', ('test',))
@@ -296,19 +361,17 @@ class EventNotification:
         self.dbq('INSERT INTO calendar (eid, e_instance_id, event_type, date_time, title, imagesuff, location, reminders) VALUES (?,?,?,?,?,?,?,?)', ('test', '14549131', '756874', '2018-10-25 06:00 PM', 'Test Node War', 'jpg', 'Serendia', ','.join(a)))
         self.load_events()
 
-    @commands.command(pass_context=True)
-    async def runevent(self, ctx):
+    @commands.command()
+    async def runevent(self):
         """Begin event notifier."""
-        if await self.chanroles(ctx):
-            await self.bot.delete_message(ctx.message)
-            if self.event_run == False:
-                await self.logger('Running Event Notifier...')
-                self.event_run = True
-                self.future = asyncio.Future()
-                asyncio.ensure_future(self.tick_event(self.future, ctx))
-            else:
-                self.event_run = False
-                await self.logger('Shutting down Event Notifier...')
+        if self.event_run == False:
+            await self.logger('Running Event Notifier...')
+            self.event_run = True
+            #self.future = asyncio.Future()
+            asyncio.ensure_future(self.tick_event())
+        else:
+            self.event_run = False
+            await self.logger('Shutting down Event Notifier...')
 
     @commands.command(pass_context=True, name='addchannel')
     async def addchannel(self, ctx, e_instance_id: str, channel: str):
@@ -317,59 +380,62 @@ class EventNotification:
                 self.dbq('UPDATE calendar SET location = ? WHERE e_instance_id = ?', (channel, e_instance_id))
                 await self.bot.say('Event ID ' + e_instance_id + ' has been updated with location: ' + channel)
 
-    @commands.command(pass_context=True, name='processcalendar') #MAKE AUTOMATIC, ENSURE NO DUPES
-    async def processcalendar(self, ctx):
-        """Updates database with calendar events from shivtr."""
+    @commands.command(pass_context=True, name='calendar')
+    async def calendar(self, ctx):
         if await self.chanroles(ctx):
-            temp_instance_id = []
-            n = datetime.now(timezone.utc)
-            for event in self.month:
-                if event.date_time < datetime.now():
-                    self.dbq('DELETE FROM calendar WHERE e_instance_id = ?', (event.e_instance_id,))
-                    self.month.remove(event)
-                temp_instance_id.append(event.e_instance_id)
-            # self.dbq('DELETE FROM calendar')
-            # self.month = []
-            user = '{"user":{"email":"haggard05@gmail.com","password":"_W0jt3k!"}}'
-            h = {"Content-Type": "application/json"}
-            login_url = 'http://slowpoke.shivtr.com/users/sign_in.json'
-            url = 'http://slowpoke.shivtr.com/events.json'
-            auth = {'auth_token': requests.post(login_url, data=user, headers=h).json()['user_session']['authentication_token']}
-            e = requests.get(url, data=auth).json()
-            eventsindex = e['events']
-            eid = {}
-            for z in eventsindex:
-                e_id = str(z['event_id'])
-                e_date = z['date']
-                #Stupid datetime hack to account for extra colon
-                if ":" == e_date[-3:-2]:
-                    e_date = e_date[:-3]+e_date[-2:]
-                d = datetime.strptime(e_date, '%Y-%m-%dT%H:%M:%S.%f%z')
-                if (e_id in eid) and (d >= n):
-                    eid[e_id]['events'].append({'id': str(z['id']), 'date': d})
-                elif d >= n:
-                    #{"832802": {"events":[], "name": "", "event_category_id": "", "eid" : ""}}
-                    print('Processing event id: '+e_id)
-                    if requests.get('http://s3.mmoguildsites.com/s3/event_photos/'+e_id+'/original.jpg').status_code == 200:
-                        imgsuff = 'jpg'
-                    elif requests.get('http://s3.mmoguildsites.com/s3/event_photos/'+e_id+'/original.png').status_code == 200:
-                        imgsuff = 'png'
-                    else:
-                        imgsuff = 'gif'
-                    event_details = requests.get('http://slowpoke.shivtr.com/events/'+e_id+'.json', data=auth).json()
-                    eid[e_id] = {'events':[{'id': str(z['id']), 'date': d}], 'imgsuff': imgsuff, 'name': event_details['event']['name'], 'event_category_id': str(event_details['event']['event_category_id'])}
-            for k in eid:
-                for e in eid[k]['events']:
-                    #eid text, e_instance_id text, event_type text, date_time text, title text, location text, reminders text
-                    if e['id'] not in temp_instance_id:
-                        Event(k, e['id'], eid[k]['event_category_id'], datetime.strftime(e['date'], '%Y-%m-%d %I:%M %p'), eid[k]['name'], eid[k]['imgsuff'], None, None, 1)
-            await self.logger('Calendar has been parsed!')
+            await self.refresh_calendar()
 
-    @commands.command(pass_context=True, name='weeklyoverview')
+    async def refresh_calendar(self):
+        """Updates database with calendar events from shivtr."""
+        temp_instance_id = []
+        n = datetime.now(timezone.utc)
+        for event in self.month:
+            if event.date_time < datetime.now():
+                self.dbq('DELETE FROM calendar WHERE e_instance_id = ?', (event.e_instance_id,))
+                self.month.remove(event)
+            temp_instance_id.append(event.e_instance_id)
+        # self.dbq('DELETE FROM calendar')
+        # self.month = []
+        user = '{"user":{"email":"email","password":"password"}}'
+        h = {"Content-Type": "application/json"}
+        login_url = 'http://slowpoke.shivtr.com/users/sign_in.json'
+        url = 'http://slowpoke.shivtr.com/events.json'
+        auth = {'auth_token': requests.post(login_url, data=user, headers=h).json()['user_session']['authentication_token']}
+        e = requests.get(url, data=auth).json()
+        eventsindex = e['events']
+        eid = {}
+        for z in eventsindex:
+            e_id = str(z['event_id'])
+            e_date = z['date']
+            #Stupid datetime hack to account for extra colon
+            if ":" == e_date[-3:-2]:
+                e_date = e_date[:-3]+e_date[-2:]
+            d = datetime.strptime(e_date, '%Y-%m-%dT%H:%M:%S.%f%z')
+            if (e_id in eid) and (d >= n):
+                eid[e_id]['events'].append({'id': str(z['id']), 'date': d})
+            elif d >= n:
+                #{"832802": {"events":[], "name": "", "event_category_id": "", "eid" : ""}}
+                print('Processing event id: '+e_id)
+                if requests.get('http://s3.mmoguildsites.com/s3/event_photos/'+e_id+'/original.jpg').status_code == 200:
+                    imgsuff = 'jpg'
+                elif requests.get('http://s3.mmoguildsites.com/s3/event_photos/'+e_id+'/original.png').status_code == 200:
+                    imgsuff = 'png'
+                else:
+                    imgsuff = 'gif'
+                event_details = requests.get('http://slowpoke.shivtr.com/events/'+e_id+'.json', data=auth).json()
+                eid[e_id] = {'events':[{'id': str(z['id']), 'date': d}], 'imgsuff': imgsuff, 'name': event_details['event']['name'], 'event_category_id': str(event_details['event']['event_category_id'])}
+        for k in eid:
+            for e in eid[k]['events']:
+                #eid text, e_instance_id text, event_type text, date_time text, title text, location text, reminders text
+                if e['id'] not in temp_instance_id:
+                    Event(k, e['id'], eid[k]['event_category_id'], datetime.strftime(e['date'], '%Y-%m-%d %I:%M %p'), eid[k]['name'], eid[k]['imgsuff'], None, None, 1)
+        await self.logger('Calendar has been parsed!', False)
+
+    @commands.command(pass_context=True, name='weeklyoverview')#CANNOT SEND EMPTY MESSAGE
     async def weeklyoverview(self, ctx, month: str, start: str, end: str):#add description?
         """Posts an event overview in the #announcements channel."""
         if await self.chanroles(ctx):
-            await self.bot.purge_from(ctx.message.server.get_channel(self.channelids['ann_temp']), limit=100)#announcements
+            await self.bot.purge_from(self.chans['announcements'], limit=100)#announcements
             week = []
             msg = ''
             event_icon = {'756874': ':crossed_swords:', '757528': ':pushpin:', '756875': ':crossed_swords:'}
@@ -382,8 +448,8 @@ class EventNotification:
             for event in week:
                 msg += event_icon[event.event_type] + ' __***' + event.title + '***__ | ' + datetime.strftime(event.date_time, '%A, %B %d') + ' | ' +datetime.strftime(event.date_time, '%I:%M %p') + ' PT / ' + datetime.strftime(event.date_time+timedelta(hours=3), '%I:%M %p') + ' ET | http://slowpoke.shivtr.com/events/'+event.eid+'?event_instance_id='+event.e_instance_id+'\n'
             #await self.bot.delete_message(ctx.message)#deletes calling message
-            await self.bot.send_message(ctx.message.server.get_channel(self.channelids['ann_temp']), msg)#announcements
-            await self.bot.send_message(ctx.message.server.get_channel(self.channelids['temp']), '@Guildies #announcements has been updated with this weeks events! Get signed up for em!')
+            await self.bot.send_message(self.chans['announcements'], msg)#announcements
+            await self.bot.send_message(self.chans['slowpokeonly'], '@Guildies #announcements has been updated with this weeks events! Get signed up for em!')
             await self.logger('Weekly Overview posted.', False)
 
     @commands.command(pass_context=True)
@@ -405,8 +471,15 @@ class EventNotification:
             self.month.append(Event(event[0], event[1], event[2], event[3], event[4], event[5], event[6], event[7], 0))
 
 ##############################Group##############################
+    async def list_groups(self):
+        if len(self.groups) > 0:
+            for cur_group in self.groups:
+                await self.bot.send_message(self.chans['lfg'], embed=cur_group.gen_embed())
+
     @commands.command(pass_context=True)
     async def group(self, ctx, *args):
+        await self.bot.delete_message(ctx.message)
+        await self.bot.purge_from(self.chans['announcements'], check=self.is_me)
         if await self.chanroles(ctx, 'Guildies'):
             author = ctx.message.author.display_name
             if args and args[0].isdigit() and args[1] == 'join':
@@ -434,7 +507,7 @@ class EventNotification:
                         return None
                     for cur_group in self.groups:
                         if author in cur_group.members:
-                            await self.logger('You cannot create a group while you are in a group. Please leave your current group and try again.')
+                            await self.logger('You cannot create a group while you are in a group. Please leave your current group and try again. `!group leave`')
                             return None
                         elif group_n in self.groups:
                             await self.logger('A group with the name '+group_n+' already exists!')
@@ -442,6 +515,7 @@ class EventNotification:
                     gid_temp = str(len(self.groups)+1)
                     self.groups.append(Group(group_n, author, gid_temp, channel, self.hex_colours[randrange(0, 19)]))
                     await self.logger(author+' has created group '+gid_temp+': '+group_n+' on '+channel)
+                    await self.list_groups()
                     return None
                 else:
                     await self.logger('Please try again with the proper syntax: `!group create (channel) Group Name`')
@@ -459,6 +533,7 @@ class EventNotification:
                         cur_group.last_updated = datetime.now().strftime('%I:%M%p %d-%m')
                         cur_group.active = True
                         await self.logger(author+' has joined group '+cur_group.group_id+': '+cur_group.group_n)
+                        await self.list_groups()
                     elif author not in cur_group.members and len(cur_group.members) == 5:
                         await self.logger('Group ' + cur_group.group_n + ' is full!')
                         return None
@@ -481,18 +556,18 @@ class EventNotification:
                     else:
                         self.groups.remove(cur_group)
                         await self.logger('Group '+cur_group.group_id+': '+cur_group.group_n+' has disbanded!')
-                    return None
+                    await self.list_groups()
                 else:
                     await self.logger('You are not in a group!')
-                    return None
+                    # return None
 
             else:
                 if len(self.groups) > 0:
-                    for cur_group in self.groups:
-                        await self.bot.send_message(ctx.message.channel, embed=cur_group.gen_embed())
+                    await self.list_groups()
+                    #for cur_group in self.groups:
+                    #    await self.bot.send_message(ctx.message.channel, embed=cur_group.gen_embed())
                 else:
                     await self.logger('There are no active groups to list!')
-                    return None
 
 class Group:
     def __init__(self, group_n, author, gid, channel, hexc):
@@ -548,7 +623,7 @@ class Event:
         if self.event_type == '756874':
             self.embed.add_field(name=':globe_with_meridians: Location:', value=self.location+str(1) if self.location != 'TBD' else self.location, inline=True)
             self.embed.add_field(name=':shopping_cart: Items to Bring:', value='[List of buffs](https://goo.gl/yhCPzi), Emergency Medical Kits, 3xPolished Stone: Repair Tower, 15xCopper Shards & 30xIron Ingots: Barricade Upgrades')
-            self.embed.add_field(name=':triangular_flag_on_post: Remember: ', value='Sign-ups must be done at least **3 hours in advance** to count for payout. If you are unable to attend, please let us know in the [comments on the event\'s page]('+eventurl+'#comments_new).', inline=False)
+            self.embed.add_field(name=':triangular_flag_on_post: Remember: ', value='Sign-ups must be done at least **1 hour in advance** to count for payout. If you are unable to attend, please let us know in the [comments on the event\'s page]('+eventurl+'#comments_new).', inline=False)
         return self.embed
 
     def rem_reminder(self, e):
